@@ -14,7 +14,7 @@ def get_subjects():
             {"id": "maths", "name": "Mathematics", "chapters": 13},
             {"id": "chemistry", "name": "Chemistry", "chapters": 16}
         ]
-    }
+    } 
 
 @app.post("/generate-questions")
 def generate_questions(
