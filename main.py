@@ -1,9 +1,8 @@
-# main.py - DEBUG LOGIN
+# main.py - SIMPLE VERSION
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 import os
 import random
-import traceback
 from database import get_db, engine
 import models
 from auth import create_access_token, get_current_user
@@ -36,34 +35,23 @@ def create_test_user(db: Session = Depends(get_db)):
         "email": test_email
     }
 
-# ✅ LOGIN WITH ERROR HANDLING
+# ✅ LOGIN WITH TOKEN
 @app.get("/login-test")
 def login_test(db: Session = Depends(get_db)):
-    try:
-        user = db.query(models.User).first()
-        if not user:
-            return {"message": "No users found"}
-        
-        # Generate token
-        access_token = create_access_token({"user_id": user.id})
-        
-        return {
-            "message": "Login successful!",
-            "user_id": user.id,
-            "email": user.email,
-            "access_token": access_token,
-            "token_type": "bearer"
-        }
-    except Exception as e:
-        return {"error": str(e), "traceback": traceback.format_exc()}
-
-# ✅ SIMPLE PROFILE (No token required for testing)
-@app.get("/simple-profile")
-def simple_profile(db: Session = Depends(get_db)):
     user = db.query(models.User).first()
-    if user:
-        return {"user_id": user.id, "email": user.email}
-    return {"message": "No user found"}
+    if not user:
+        return {"message": "No users found"}
+    
+    # Generate token
+    access_token = create_access_token({"user_id": user.id})
+    
+    return {
+        "message": "Login successful!",
+        "user_id": user.id,
+        "email": user.email,
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
 # ✅ PROTECTED PROFILE
 @app.get("/profile")
