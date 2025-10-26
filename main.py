@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 import os
+import random
 from database import get_db, engine
 import models
 import schemas
@@ -15,6 +16,50 @@ app = FastAPI(title="Question-AI", version="1.0.0")
 def home():
     return {"message": "Question AI API is running!", "status": "active"}
 
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
+
+# ✅ SIMPLE TEST ENDPOINT - Browser se directly test kar sakte hain
+@app.get("/create-test-user")
+def create_test_user(db: Session = Depends(get_db)):
+    """Test user create karne ke liye simple GET endpoint"""
+    test_email = f"test{random.randint(1000,9999)}@example.com"
+    
+    new_user = models.User(
+        email=test_email, 
+        password=hash_password("test123")  # Password hash karein
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return {
+        "message": "Test user created successfully", 
+        "user_id": new_user.id, 
+        "email": test_email,
+        "password_used": "test123"
+    }
+
+# ✅ SIMPLE LOGIN TEST ENDPOINT  
+@app.get("/test-login")
+def test_login(db: Session = Depends(get_db)):
+    """Test login ke liye - pehle koi user create karein"""
+    user = db.query(models.User).first()
+    if not user:
+        return {"message": "Pehle /create-test-user par jaake user create karein"}
+    
+    # Verify password
+    password_correct = verify_password("test123", user.password)
+    
+    return {
+        "user_exists": True,
+        "user_id": user.id,
+        "email": user.email,
+        "password_verified": password_correct
+    }
+
+# ✅ ORIGINAL ENDPOINTS (POST methods - Curl/Postman ke liye)
 @app.post("/register")
 def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
     # Check if user exists
