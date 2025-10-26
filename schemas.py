@@ -1,6 +1,5 @@
-# schemas.py
+# schemas.py - SIMPLE VERSION
 from pydantic import BaseModel
-from datetime import datetime
 
 class UserCreate(BaseModel):
     email: str
@@ -9,7 +8,6 @@ class UserCreate(BaseModel):
 class UserResponse(BaseModel):
     id: int
     email: str
-    created_at: datetime
     
     class Config:
         from_attributes = True
