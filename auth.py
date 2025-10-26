@@ -5,7 +5,7 @@ from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 import os
 from jose import jwt, JWTError  # ✅ Correct import
-import database
+import database 
 import models
 
 SECRET_KEY = os.getenv("SECRET_KEY", "test-secret-key-123")
