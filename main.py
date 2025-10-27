@@ -1,4 +1,4 @@
-# main.py - WITH GEMINI AI
+# main.py - WITH CORRECT GEMINI MODEL
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 import os
@@ -10,19 +10,35 @@ from database import get_db, engine
 import models
 import schemas
 from auth import create_access_token, get_current_user
-import google.generativeai as genai
 
 # Create tables
 models.Base.metadata.create_all(bind=engine)
 
-# Gemini AI Setup
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
 app = FastAPI(title="Question-AI", version="1.0.0")
+
+# Gemini AI Setup with better error handling
+try:
+    import google.generativeai as genai
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_AVAILABLE = True
+        print("Gemini AI configured successfully")
+    else:
+        GEMINI_AVAILABLE = False
+        print("GEMINI_API_KEY not found")
+except Exception as e:
+    GEMINI_AVAILABLE = False
+    print(f"Gemini AI setup failed: {e}")
 
 @app.get("/")
 def home():
-    return {"message": "Question AI API is running!", "status": "active"}
+    gemini_status = "available" if GEMINI_AVAILABLE else "unavailable"
+    return {
+        "message": "Question AI API is running!", 
+        "status": "active",
+        "gemini_ai": gemini_status
+    }
 
 @app.get("/health")
 def health_check():
@@ -79,28 +95,28 @@ def get_profile(current_user: models.User = Depends(get_current_user)):
         "email": current_user.email
     }
 
-# ✅ GEMINI AI QUESTION GENERATION
+# ✅ QUESTION GENERATION
 @app.post("/generate-questions")
 def generate_questions(
     request: schemas.QuestionRequest,
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    try:
-        # Try Gemini AI first
-        questions = generate_questions_with_gemini(request)
-        source = "Gemini AI"
-        
-    except Exception as e:
-        # Fallback to sample questions
+    if GEMINI_AVAILABLE:
+        try:
+            questions = generate_questions_with_gemini(request)
+            source = "Gemini AI"
+        except Exception as e:
+            questions = generate_sample_questions(request)
+            source = f"Sample (AI Error: {str(e)})"
+    else:
         questions = generate_sample_questions(request)
-        source = f"Sample (AI Error: {str(e)})"
+        source = "Sample (Gemini AI not configured)"
     
     return {
-        "message": f"Questions generated successfully using {source}",
+        "message": f"Questions generated using {source}",
         "subject": request.subject,
         "chapter": request.chapter,
-        "difficulty": request.difficulty,
         "questions": questions,
         "count": len(questions)
     }
@@ -108,54 +124,51 @@ def generate_questions(
 def generate_questions_with_gemini(request: schemas.QuestionRequest):
     """Gemini AI se actual questions generate karein"""
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        # ✅ CORRECT MODEL NAME - gemini-1.5-pro ya gemini-1.0-pro
+        model = genai.GenerativeModel('gemini-1.5-pro')
         
         prompt = f"""
         Generate 3 unique multiple choice questions for {request.subject} chapter {request.chapter}.
-        Difficulty level: {request.difficulty}
+        Difficulty: {request.difficulty}
         Language: {request.language}
         
-        Each question should have:
-        - Clear question text
-        - 4 options (A, B, C, D)
-        - Correct answer marked
-        
-        Return ONLY valid JSON format like this:
+        Return ONLY valid JSON format (no other text):
         [
             {{
-                "question": "What is Newton's First Law?",
-                "options": ["F=ma", "Action-reaction", "Inertia", "Gravity"],
-                "correct_answer": "Inertia"
+                "question": "Question text?",
+                "options": ["Option A", "Option B", "Option C", "Option D"],
+                "correct_answer": "Correct option text"
             }}
         ]
         
-        Make questions relevant to {request.subject} chapter {request.chapter}.
+        Make questions educational and relevant to the subject.
         """
         
         response = model.generate_content(prompt)
-        print("Gemini Response:", response.text)  # Debugging
+        print("Gemini Raw Response:", response.text)
         
-        # Simple parsing - extract JSON from response
+        # JSON extract karein
         import re
         json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if json_match:
             questions = json.loads(json_match.group())
             return questions
         else:
-            raise Exception("Could not parse Gemini response")
+            # Agar JSON parse nahi ho, toh sample return karein
+            return generate_sample_questions(request)
             
     except Exception as e:
-        print(f"Gemini AI Error: {str(e)}")
+        print(f"Gemini Error: {e}")
         raise e
 
 def generate_sample_questions(request: schemas.QuestionRequest):
     """Fallback sample questions"""
-    sample_questions = {
+    sample_data = {
         "physics": [
             {
                 "question": "What is Newton's First Law of Motion?",
-                "options": ["F = ma", "Every action has equal reaction", "Object at rest stays at rest", "Energy conservation"],
-                "correct_answer": "Object at rest stays at rest"
+                "options": ["F = ma", "Action-reaction", "Inertia", "Gravity"],
+                "correct_answer": "Inertia"
             },
             {
                 "question": "What is the SI unit of force?",
@@ -165,21 +178,21 @@ def generate_sample_questions(request: schemas.QuestionRequest):
         ],
         "maths": [
             {
-                "question": "What is the value of π (pi)?",
-                "options": ["3.14", "2.71", "1.61", "4.66"],
-                "correct_answer": "3.14"
+                "question": "What is 2 + 2?",
+                "options": ["3", "4", "5", "6"],
+                "correct_answer": "4"
             }
         ],
         "chemistry": [
             {
-                "question": "What is the atomic number of Hydrogen?",
-                "options": ["1", "2", "6", "8"],
-                "correct_answer": "1"
+                "question": "What is H₂O?",
+                "options": ["Oxygen", "Hydrogen", "Water", "Carbon dioxide"],
+                "correct_answer": "Water"
             }
         ]
     }
     
-    return sample_questions.get(request.subject, [
+    return sample_data.get(request.subject, [
         {
             "question": f"Sample question for {request.subject} chapter {request.chapter}",
             "options": ["Option A", "Option B", "Option C", "Option D"],
@@ -187,25 +200,58 @@ def generate_sample_questions(request: schemas.QuestionRequest):
         }
     ])
 
-# ✅ TEST GEMINI CONNECTION (Public endpoint)
+# ✅ TEST GEMINI CONNECTION
 @app.get("/test-gemini")
 def test_gemini():
-    """Test Gemini AI connection without authentication"""
+    """Test Gemini AI connection"""
+    if not GEMINI_AVAILABLE:
+        return {
+            "gemini_status": "not_configured",
+            "message": "GEMINI_API_KEY environment variable not set"
+        }
+    
     try:
-        model = genai.GenerativeModel('gemini-pro')
+        # ✅ CORRECT MODEL NAME use karein
+        model = genai.GenerativeModel('gemini-1.5-pro')
         response = model.generate_content("Say 'Hello World' in one word.")
         
         return {
             "gemini_status": "connected",
             "response": response.text,
-            "message": "Gemini AI is working correctly!"
+            "message": "Gemini AI is working!"
         }
     except Exception as e:
+        # Alternative model try karein
+        try:
+            model = genai.GenerativeModel('gemini-1.0-pro')
+            response = model.generate_content("Say 'Hello World' in one word.")
+            
+            return {
+                "gemini_status": "connected",
+                "response": response.text,
+                "message": "Gemini AI is working! (using gemini-1.0-pro)"
+            }
+        except Exception as e2:
+            return {
+                "gemini_status": "error",
+                "error": f"gemini-1.5-pro: {str(e)}, gemini-1.0-pro: {str(e2)}",
+                "message": "Both Gemini models failed"
+            }
+
+# ✅ LIST AVAILABLE MODELS (Debugging ke liye)
+@app.get("/list-models")
+def list_models():
+    """Available models list karein"""
+    if not GEMINI_AVAILABLE:
+        return {"message": "Gemini not configured"}
+    
+    try:
+        models_list = genai.list_models()
         return {
-            "gemini_status": "error",
-            "error": str(e),
-            "message": "Gemini AI connection failed"
+            "available_models": [model.name for model in models_list]
         }
+    except Exception as e:
+        return {"error": str(e)}
 
 # ✅ USER STATS
 @app.get("/user/stats")
