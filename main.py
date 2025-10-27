@@ -1,4 +1,4 @@
-# main.py - COMPLETE UPDATED VERSION WITH DAILY LIMITS
+# main.py - WITH WORDPRESS MEDIA LIBRARY API INTEGRATION
 
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from datetime import date, datetime
 import requests
 from docx import Document
 import io
+import re
 
 from database import get_db, engine
 import models
@@ -19,7 +20,7 @@ from auth import create_access_token, get_current_user
 # Create tables
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Question-AI", version="2.0.0")
+app = FastAPI(title="Question-AI", version="2.1.0")
 
 # Gemini AI Setup
 try:
@@ -36,6 +37,12 @@ except Exception as e:
     GEMINI_AVAILABLE = False
     print(f"Gemini AI setup failed: {e}")
 
+# WordPress API Configuration
+WORDPRESS_SITE_URL = "https://5minanswer.com"
+WORDPRESS_USERNAME = os.getenv("WORDPRESS_USERNAME")
+WORDPRESS_PASSWORD = os.getenv("WORDPRESS_PASSWORD")
+WORDPRESS_APPLICATION_PASSWORD = os.getenv("WORDPRESS_APPLICATION_PASSWORD")
+
 # ✅ RENDER HEALTH CHECK KE LIYE HEAD ROUTE
 @app.head("/")
 def head_root():
@@ -44,19 +51,199 @@ def head_root():
 @app.get("/")
 def home():
     gemini_status = "available" if GEMINI_AVAILABLE else "unavailable"
+    wordpress_status = "configured" if WORDPRESS_USERNAME and WORDPRESS_APPLICATION_PASSWORD else "not_configured"
+    
     return {
         "message": "Question AI API is running!", 
         "status": "active",
         "gemini_ai": gemini_status,
-        "version": "2.0.0",
-        "features": ["daily_limits", "chapter_based", "multi_language"]
+        "wordpress_api": wordpress_status,
+        "version": "2.1.0",
+        "features": ["daily_limits", "chapter_based", "multi_language", "wordpress_media_api"]
     }
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
 
-# ✅ NEW: AVAILABLE SUBJECTS AND CHAPTERS
+# ✅ WORDPRESS MEDIA LIBRARY API FUNCTIONS
+def get_wordpress_auth_header():
+    """WordPress API ke liye authentication header banaye"""
+    if WORDPRESS_USERNAME and WORDPRESS_APPLICATION_PASSWORD:
+        import base64
+        credentials = f"{WORDPRESS_USERNAME}:{WORDPRESS_APPLICATION_PASSWORD}"
+        token = base64.b64encode(credentials.encode()).decode()
+        return {'Authorization': f'Basic {token}'}
+    else:
+        return {}
+
+def search_media_files(search_term):
+    """WordPress media library mein files search kare"""
+    try:
+        url = f"{WORDPRESS_SITE_URL}/wp-json/wp/v2/media"
+        params = {
+            'search': search_term,
+            'per_page': 50,
+            'orderby': 'date',
+            'order': 'desc'
+        }
+        
+        headers = get_wordpress_auth_header()
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            media_items = response.json()
+            return media_items
+        else:
+            print(f"WordPress API error: {response.status_code} - {response.text}")
+            return []
+            
+    except Exception as e:
+        print(f"WordPress search error: {e}")
+        return []
+
+def find_chapter_doc(class_level, subject, chapter):
+    """Specific chapter ki DOC file find kare"""
+    search_terms = [
+        f"Class-{class_level}{subject}Chapter-{chapter}",
+        f"Class-{class_level}{subject}Chepter-{chapter}",
+        f"Class {class_level} {subject} Chapter {chapter}",
+        f"Class-{class_level}-{subject}-Chapter-{chapter}",
+        f"Class-{class_level}-{subject}-Chepter-{chapter}",
+        f"{class_level} {subject} {chapter}",
+        f"Class{class_level}{subject}Chapter{chapter}",
+    ]
+    
+    for search_term in search_terms:
+        print(f"Searching for: {search_term}")
+        media_items = search_media_files(search_term)
+        
+        for item in media_items:
+            file_url = item.get('source_url', '')
+            file_title = item.get('title', {}).get('rendered', '')
+            file_name = item.get('slug', '')
+            
+            # Check if this is a DOC file
+            if any(ext in file_url.lower() for ext in ['.docx', '.doc']):
+                print(f"Found DOC file: {file_title} - {file_url}")
+                return file_url
+    
+    return None
+
+def download_doc_content_from_url(doc_url):
+    """DOC file URL se content download kare"""
+    try:
+        headers = get_wordpress_auth_header()
+        response = requests.get(doc_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            # DOC file parse karein
+            doc = Document(io.BytesIO(response.content))
+            content = ""
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    content += paragraph.text + "\n"
+            
+            print(f"Downloaded content length: {len(content)}")
+            return content if content else None
+        else:
+            print(f"DOC download failed with status: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        print(f"DOC download error: {e}")
+        return None
+
+def get_doc_content(class_level, subject, chapter):
+    """Main function: Chapter ki DOC file find kare aur content return kare"""
+    print(f"Looking for Class {class_level} {subject} Chapter {chapter}")
+    
+    # Step 1: WordPress media library mein search karein
+    doc_url = find_chapter_doc(class_level, subject, chapter)
+    
+    if doc_url:
+        # Step 2: DOC file download karein
+        content = download_doc_content_from_url(doc_url)
+        if content:
+            return content
+    
+    # Step 3: Fallback - Direct URL try karein
+    fallback_urls = [
+        f"https://5minanswer.com/wp-content/uploads/2025/10/Class-{class_level}{subject.capitalize()}-Chepter-{chapter}.docx",
+        f"https://5minanswer.com/wp-content/uploads/2025/10/Class-{class_level}{subject}-Chepter-{chapter}.docx",
+        f"https://5minanswer.com/wp-content/uploads/2025/10/Class-{class_level}{subject.capitalize()}-Chapter-{chapter}.docx",
+    ]
+    
+    for url in fallback_urls:
+        print(f"Trying fallback URL: {url}")
+        content = download_doc_content_from_url(url)
+        if content:
+            return content
+    
+    # Step 4: Agar kuch nahi mila, toh AI se directly generate karein
+    print("No DOC file found. Using AI fallback.")
+    return f"Generate questions for Class {class_level} {subject} Chapter {chapter}"
+
+# ✅ NEW: WORDPRESS MEDIA API TEST ENDPOINT
+@app.get("/test-wordpress-media")
+def test_wordpress_media():
+    """Test WordPress media library connection"""
+    if not WORDPRESS_USERNAME or not WORDPRESS_APPLICATION_PASSWORD:
+        return {
+            "wordpress_status": "not_configured",
+            "message": "WORDPRESS_USERNAME and WORDPRESS_APPLICATION_PASSWORD environment variables required"
+        }
+    
+    try:
+        # Test search functionality
+        media_items = search_media_files("Class-12Physics")
+        
+        return {
+            "wordpress_status": "connected",
+            "media_items_found": len(media_items),
+            "sample_items": [
+                {
+                    "id": item.get('id'),
+                    "title": item.get('title', {}).get('rendered'),
+                    "url": item.get('source_url'),
+                    "type": item.get('mime_type')
+                }
+                for item in media_items[:3]  # First 3 items
+            ],
+            "message": "WordPress media library accessible"
+        }
+    except Exception as e:
+        return {
+            "wordpress_status": "error",
+            "error": str(e),
+            "message": "WordPress media library connection failed"
+        }
+
+# ✅ NEW: SEARCH MEDIA FILES ENDPOINT
+@app.get("/search-media")
+def search_media_files_endpoint(search_term: str = ""):
+    """WordPress media library mein files search kare"""
+    if not search_term:
+        return {"error": "Search term required"}
+    
+    media_items = search_media_files(search_term)
+    
+    return {
+        "search_term": search_term,
+        "total_found": len(media_items),
+        "media_files": [
+            {
+                "id": item.get('id'),
+                "title": item.get('title', {}).get('rendered'),
+                "url": item.get('source_url'),
+                "mime_type": item.get('mime_type'),
+                "date": item.get('date')
+            }
+            for item in media_items
+        ]
+    }
+
+# ✅ AVAILABLE SUBJECTS AND CHAPTERS
 @app.get("/available-subjects")
 def get_available_subjects():
     return {
@@ -72,36 +259,7 @@ def get_available_subjects():
         ]
     }
 
-# ✅ NEW: DOWNLOAD DOC CONTENT FROM WORDPRESS
-def download_doc_content(class_level, subject, chapter):
-    """WordPress se DOC file download karke text extract karega"""
-    try:
-        # URL format based on your WordPress site
-        subject_formatted = subject.capitalize()
-        url = f"https://5minanswer.com/wp-content/uploads/2025/10/Class-{class_level}{subject_formatted}-Chapter-{chapter}.docx"
-        
-        print(f"Downloading from: {url}")
-        response = requests.get(url, timeout=30)
-        
-        if response.status_code == 200:
-            # DOC file parse karein
-            doc = Document(io.BytesIO(response.content))
-            content = ""
-            for paragraph in doc.paragraphs:
-                if paragraph.text.strip():
-                    content += paragraph.text + "\n"
-            
-            print(f"Downloaded content length: {len(content)}")
-            return content if content else None
-        else:
-            print(f"Download failed with status: {response.status_code}")
-            return None
-            
-    except Exception as e:
-        print(f"DOC download error: {e}")
-        return None
-
-# ✅ NEW: DAILY LIMIT CHECKER
+# ✅ DAILY LIMIT CHECKER
 def check_daily_limit(db: Session, user_id: int, subject: str):
     """24 hours ka limit check karega"""
     today = date.today()
@@ -141,7 +299,7 @@ def get_today_usage(db: Session, user_id: int, subject: str):
     
     return usage.questions_generated_today if usage else 0
 
-# ✅ NEW: SMART QUESTION GENERATOR FROM DOC CONTENT
+# ✅ SMART QUESTION GENERATOR FROM DOC CONTENT
 def generate_questions_from_content(content, question_count=25, difficulty="medium", language="english"):
     """DOC content se intelligent questions generate karega"""
     if not GEMINI_AVAILABLE:
@@ -179,7 +337,6 @@ def generate_questions_from_content(content, question_count=25, difficulty="medi
         print("Gemini Response:", response.text)
         
         # JSON extract karein
-        import re
         json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
         if json_match:
             questions = json.loads(json_match.group())
@@ -202,7 +359,7 @@ def generate_sample_questions_from_subject(subject, count=25):
         })
     return sample_questions
 
-# ✅ NEW: GENERATE FROM CHAPTER ENDPOINT
+# ✅ GENERATE FROM CHAPTER ENDPOINT (UPDATED)
 @app.post("/generate-from-chapter")
 def generate_from_chapter(
     request: schemas.ChapterRequest,
@@ -214,11 +371,8 @@ def generate_from_chapter(
     if not limit_ok:
         raise HTTPException(status_code=400, detail=message)
     
-    # 2. Download DOC content
-    content = download_doc_content(request.class_level, request.subject, request.chapter)
-    if not content:
-        # Fallback to AI without content
-        content = f"Generate {request.question_count} questions for Class {request.class_level} {request.subject} Chapter {request.chapter}"
+    # 2. Get DOC content from WordPress media library
+    content = get_doc_content(request.class_level, request.subject, request.chapter)
     
     # 3. Generate questions
     questions = generate_questions_from_content(
@@ -244,8 +398,12 @@ def generate_from_chapter(
         db.add(history)
     db.commit()
     
+    # 5. Determine content source
+    content_source = "WordPress DOC File" if "Generate questions for" not in content else "AI Generation (No DOC)"
+    
     return {
         "message": "Questions generated successfully",
+        "content_source": content_source,
         "class_level": request.class_level,
         "subject": request.subject,
         "chapter": request.chapter,
@@ -256,7 +414,7 @@ def generate_from_chapter(
         "questions": questions
     }
 
-# ✅ NEW: MY USAGE STATUS
+# ✅ MY USAGE STATUS
 @app.get("/my-usage")
 def get_my_usage(
     current_user: models.User = Depends(get_current_user),
@@ -336,107 +494,6 @@ def get_profile(current_user: models.User = Depends(get_current_user)):
         "email": current_user.email
     }
 
-# ✅ OLD QUESTION GENERATION (FOR BACKWARD COMPATIBILITY)
-@app.post("/generate-questions")
-def generate_questions(
-    request: schemas.QuestionRequest,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if GEMINI_AVAILABLE:
-        try:
-            questions = generate_questions_with_gemini(request)
-            source = "Gemini AI"
-        except Exception as e:
-            questions = generate_sample_questions(request)
-            source = f"Sample (AI Error: {str(e)})"
-    else:
-        questions = generate_sample_questions(request)
-        source = "Sample (Gemini AI not configured)"
-    
-    return {
-        "message": f"Questions generated using {source}",
-        "subject": request.subject,
-        "chapter": request.chapter,
-        "questions": questions,
-        "count": len(questions)
-    }
-
-def generate_questions_with_gemini(request: schemas.QuestionRequest):
-    """Gemini AI se actual questions generate karein"""
-    try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        
-        prompt = f"""
-        Generate 3 unique multiple choice questions for {request.subject} chapter {request.chapter}.
-        Difficulty: {request.difficulty}
-        Language: {request.language}
-        
-        Requirements:
-        - Each question should be educational and relevant
-        - 4 options for each question
-        - Mark the correct answer clearly
-        
-        Return ONLY valid JSON format (no other text):
-        [
-            {{
-                "question": "Question text here?",
-                "options": ["Option A", "Option B", "Option C", "Option D"],
-                "correct_answer": "Correct option text"
-            }}
-        ]
-        """
-        
-        response = model.generate_content(prompt)
-        print("Gemini Raw Response:", response.text)
-        
-        # JSON extract karein
-        import re
-        json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
-        if json_match:
-            questions = json.loads(json_match.group())
-            return questions[:3]  # Maximum 3 questions
-        else:
-            return generate_sample_questions(request)
-            
-    except Exception as e:
-        print(f"Gemini Error: {e}")
-        raise e
-
-def generate_sample_questions(request: schemas.QuestionRequest):
-    """Fallback sample questions"""
-    sample_data = {
-        "physics": [
-            {
-                "question": "What is Newton's First Law of Motion?",
-                "options": ["F = ma", "Action-reaction", "Inertia", "Gravity"],
-                "correct_answer": "Inertia"
-            }
-        ],
-        "maths": [
-            {
-                "question": "What is 2 + 2?",
-                "options": ["3", "4", "5", "6"],
-                "correct_answer": "4"
-            }
-        ],
-        "chemistry": [
-            {
-                "question": "What is H₂O?",
-                "options": ["Oxygen", "Hydrogen", "Water", "Carbon dioxide"],
-                "correct_answer": "Water"
-            }
-        ]
-    }
-    
-    return sample_data.get(request.subject, [
-        {
-            "question": f"Sample question for {request.subject} chapter {request.chapter}",
-            "options": ["Option A", "Option B", "Option C", "Option D"],
-            "correct_answer": "Option A"
-        }
-    ])
-
 # ✅ TEST GEMINI CONNECTION
 @app.get("/test-gemini")
 def test_gemini():
@@ -463,18 +520,6 @@ def test_gemini():
             "error": str(e),
             "message": "Gemini AI connection failed"
         }
-
-# ✅ USER STATS
-@app.get("/user/stats")
-def get_user_stats(
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    return {
-        "user_id": current_user.id,
-        "today_usage": 0,
-        "subjects_used_today": []
-    }
 
 @app.get("/test-db")
 def test_db(db: Session = Depends(get_db)):
