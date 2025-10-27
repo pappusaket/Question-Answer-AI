@@ -29,3 +29,26 @@ class Question(Base):
     difficulty = Column(String(50), default="medium")
     language = Column(String(10), default="english")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+# NEW MODELS FOR DAILY LIMITS
+class UsageLimit(Base):
+    __tablename__ = "usage_limits"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    subject = Column(String(50), nullable=False)
+    last_used_date = Column(Date, nullable=False)
+    questions_generated_today = Column(Integer, default=0)
+
+class QuestionHistory(Base):
+    __tablename__ = "question_history"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    class_level = Column(Integer, nullable=False)
+    subject = Column(String(50), nullable=False)
+    chapter = Column(Integer, nullable=False)
+    question_text = Column(Text, nullable=False)
+    options = Column(Text)  # JSON as string
+    correct_answer = Column(String(500), nullable=False)
+    difficulty = Column(String(20), default="medium")
+    language = Column(String(10), default="english")
+    generated_at = Column(DateTime(timezone=True), server_default=func.now())
