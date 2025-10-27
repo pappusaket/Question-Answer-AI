@@ -1,4 +1,4 @@
-# main.py - WITH CORRECT GEMINI MODELS
+# main.py - COMPLETE WORKING VERSION
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 import os
