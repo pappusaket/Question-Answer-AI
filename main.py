@@ -1,4 +1,4 @@
-# main.py - WITH CORRECT GEMINI MODEL
+# main.py - WITH CORRECT GEMINI MODELS
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 import os
@@ -16,7 +16,7 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Question-AI", version="1.0.0")
 
-# Gemini AI Setup with better error handling
+# Gemini AI Setup
 try:
     import google.generativeai as genai
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -30,6 +30,14 @@ try:
 except Exception as e:
     GEMINI_AVAILABLE = False
     print(f"Gemini AI setup failed: {e}")
+
+# ✅ CORRECT MODEL NAMES from available models list
+GEMINI_MODELS = [
+    'models/gemini-2.0-flash',  # Fast and efficient
+    'models/gemini-2.0-flash-001',
+    'models/gemini-pro-latest',  # Latest pro version
+    'models/gemini-flash-latest' # Latest flash version
+]
 
 @app.get("/")
 def home():
@@ -123,43 +131,47 @@ def generate_questions(
 
 def generate_questions_with_gemini(request: schemas.QuestionRequest):
     """Gemini AI se actual questions generate karein"""
-    try:
-        # ✅ CORRECT MODEL NAME - gemini-1.5-pro ya gemini-1.0-pro
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        
-        prompt = f"""
-        Generate 3 unique multiple choice questions for {request.subject} chapter {request.chapter}.
-        Difficulty: {request.difficulty}
-        Language: {request.language}
-        
-        Return ONLY valid JSON format (no other text):
-        [
-            {{
-                "question": "Question text?",
-                "options": ["Option A", "Option B", "Option C", "Option D"],
-                "correct_answer": "Correct option text"
-            }}
-        ]
-        
-        Make questions educational and relevant to the subject.
-        """
-        
-        response = model.generate_content(prompt)
-        print("Gemini Raw Response:", response.text)
-        
-        # JSON extract karein
-        import re
-        json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
-        if json_match:
-            questions = json.loads(json_match.group())
-            return questions
-        else:
-            # Agar JSON parse nahi ho, toh sample return karein
-            return generate_sample_questions(request)
+    for model_name in GEMINI_MODELS:
+        try:
+            print(f"Trying model: {model_name}")
+            model = genai.GenerativeModel(model_name)
             
-    except Exception as e:
-        print(f"Gemini Error: {e}")
-        raise e
+            prompt = f"""
+            Generate 3 unique multiple choice questions for {request.subject} chapter {request.chapter}.
+            Difficulty: {request.difficulty}
+            Language: {request.language}
+            
+            Return ONLY valid JSON format (no other text):
+            [
+                {{
+                    "question": "Question text?",
+                    "options": ["Option A", "Option B", "Option C", "Option D"],
+                    "correct_answer": "Correct option text"
+                }}
+            ]
+            
+            Make questions educational and relevant to the subject.
+            """
+            
+            response = model.generate_content(prompt)
+            print(f"Success with model: {model_name}")
+            print("Gemini Response:", response.text)
+            
+            # JSON extract karein
+            import re
+            json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
+            if json_match:
+                questions = json.loads(json_match.group())
+                return questions
+            else:
+                continue  # Next model try karein
+                
+        except Exception as e:
+            print(f"Model {model_name} failed: {e}")
+            continue  # Next model try karein
+    
+    # Agar sab models fail, toh sample return karein
+    return generate_sample_questions(request)
 
 def generate_sample_questions(request: schemas.QuestionRequest):
     """Fallback sample questions"""
@@ -210,35 +222,28 @@ def test_gemini():
             "message": "GEMINI_API_KEY environment variable not set"
         }
     
-    try:
-        # ✅ CORRECT MODEL NAME use karein
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        response = model.generate_content("Say 'Hello World' in one word.")
-        
-        return {
-            "gemini_status": "connected",
-            "response": response.text,
-            "message": "Gemini AI is working!"
-        }
-    except Exception as e:
-        # Alternative model try karein
+    for model_name in GEMINI_MODELS:
         try:
-            model = genai.GenerativeModel('gemini-1.0-pro')
+            print(f"Testing model: {model_name}")
+            model = genai.GenerativeModel(model_name)
             response = model.generate_content("Say 'Hello World' in one word.")
             
             return {
                 "gemini_status": "connected",
+                "model_used": model_name,
                 "response": response.text,
-                "message": "Gemini AI is working! (using gemini-1.0-pro)"
+                "message": "Gemini AI is working!"
             }
-        except Exception as e2:
-            return {
-                "gemini_status": "error",
-                "error": f"gemini-1.5-pro: {str(e)}, gemini-1.0-pro: {str(e2)}",
-                "message": "Both Gemini models failed"
-            }
+        except Exception as e:
+            print(f"Model {model_name} failed: {e}")
+            continue
+    
+    return {
+        "gemini_status": "error",
+        "message": "All Gemini models failed"
+    }
 
-# ✅ LIST AVAILABLE MODELS (Debugging ke liye)
+# ✅ LIST AVAILABLE MODELS
 @app.get("/list-models")
 def list_models():
     """Available models list karein"""
@@ -248,7 +253,8 @@ def list_models():
     try:
         models_list = genai.list_models()
         return {
-            "available_models": [model.name for model in models_list]
+            "available_models": [model.name for model in models_list],
+            "recommended_models": GEMINI_MODELS
         }
     except Exception as e:
         return {"error": str(e)}
