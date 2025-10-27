@@ -1,4 +1,4 @@
-# main.py - WITH HEAD ROUTE FOR RENDER
+# main.py - COMPLETE UPDATED VERSION WITH DAILY LIMITS
 
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -6,7 +6,11 @@ import os
 import random
 import json
 import traceback
-from datetime import date
+from datetime import date, datetime
+import requests
+from docx import Document
+import io
+
 from database import get_db, engine
 import models
 import schemas
@@ -15,7 +19,7 @@ from auth import create_access_token, get_current_user
 # Create tables
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Question-AI", version="1.0.0")
+app = FastAPI(title="Question-AI", version="2.0.0")
 
 # Gemini AI Setup
 try:
@@ -43,13 +47,244 @@ def home():
     return {
         "message": "Question AI API is running!", 
         "status": "active",
-        "gemini_ai": gemini_status
+        "gemini_ai": gemini_status,
+        "version": "2.0.0",
+        "features": ["daily_limits", "chapter_based", "multi_language"]
     }
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
 
+# ✅ NEW: AVAILABLE SUBJECTS AND CHAPTERS
+@app.get("/available-subjects")
+def get_available_subjects():
+    return {
+        "classes": [9, 10, 11, 12],
+        "subjects": [
+            {"id": "physics", "name": "Physics", "chapters": 14},
+            {"id": "maths", "name": "Mathematics", "chapters": 13},
+            {"id": "chemistry", "name": "Chemistry", "chapters": 16},
+            {"id": "hindi", "name": "Hindi", "chapters": 10},
+            {"id": "english", "name": "English", "chapters": 8},
+            {"id": "social-science", "name": "Social Science", "chapters": 12},
+            {"id": "sanskrit", "name": "Sanskrit", "chapters": 6}
+        ]
+    }
+
+# ✅ NEW: DOWNLOAD DOC CONTENT FROM WORDPRESS
+def download_doc_content(class_level, subject, chapter):
+    """WordPress se DOC file download karke text extract karega"""
+    try:
+        # URL format based on your WordPress site
+        subject_formatted = subject.capitalize()
+        url = f"https://5minanswer.com/wp-content/uploads/2025/10/Class-{class_level}{subject_formatted}-Chapter-{chapter}.docx"
+        
+        print(f"Downloading from: {url}")
+        response = requests.get(url, timeout=30)
+        
+        if response.status_code == 200:
+            # DOC file parse karein
+            doc = Document(io.BytesIO(response.content))
+            content = ""
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    content += paragraph.text + "\n"
+            
+            print(f"Downloaded content length: {len(content)}")
+            return content if content else None
+        else:
+            print(f"Download failed with status: {response.status_code}")
+            return None
+            
+    except Exception as e:
+        print(f"DOC download error: {e}")
+        return None
+
+# ✅ NEW: DAILY LIMIT CHECKER
+def check_daily_limit(db: Session, user_id: int, subject: str):
+    """24 hours ka limit check karega"""
+    today = date.today()
+    
+    usage = db.query(models.UsageLimit).filter(
+        models.UsageLimit.user_id == user_id,
+        models.UsageLimit.subject == subject,
+        models.UsageLimit.last_used_date == today
+    ).first()
+    
+    if usage:
+        if usage.questions_generated_today >= 25:
+            return False, "Daily limit reached for this subject. You can generate 25 questions per subject every 24 hours."
+        # Increment count
+        usage.questions_generated_today += 1
+    else:
+        # New entry
+        usage = models.UsageLimit(
+            user_id=user_id,
+            subject=subject,
+            last_used_date=today,
+            questions_generated_today=1
+        )
+        db.add(usage)
+    
+    db.commit()
+    return True, "Limit check passed"
+
+def get_today_usage(db: Session, user_id: int, subject: str):
+    """Get today's usage for a subject"""
+    today = date.today()
+    usage = db.query(models.UsageLimit).filter(
+        models.UsageLimit.user_id == user_id,
+        models.UsageLimit.subject == subject,
+        models.UsageLimit.last_used_date == today
+    ).first()
+    
+    return usage.questions_generated_today if usage else 0
+
+# ✅ NEW: SMART QUESTION GENERATOR FROM DOC CONTENT
+def generate_questions_from_content(content, question_count=25, difficulty="medium", language="english"):
+    """DOC content se intelligent questions generate karega"""
+    if not GEMINI_AVAILABLE:
+        return generate_sample_questions_from_subject("general", question_count)
+    
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        prompt = f"""
+        Based on the following textbook chapter content, generate {question_count} multiple choice questions.
+        
+        CONTENT:
+        {content[:3000]}  # Limit content length
+        
+        Requirements:
+        - Create one-line objective questions
+        - 4 options for each question (1 correct + 3 wrong)
+        - Difficulty: {difficulty}
+        - Language: {language}
+        - Questions should be based on the actual content
+        - Wrong options should be plausible but incorrect
+        - Return exactly {question_count} questions
+        
+        Return ONLY valid JSON format (no other text):
+        [
+            {{
+                "question": "One-line question text?",
+                "options": ["Option A", "Option B", "Option C", "Option D"],
+                "correct_answer": "Correct option text"
+            }}
+        ]
+        """
+        
+        response = model.generate_content(prompt)
+        print("Gemini Response:", response.text)
+        
+        # JSON extract karein
+        import re
+        json_match = re.search(r'\[.*\]', response.text, re.DOTALL)
+        if json_match:
+            questions = json.loads(json_match.group())
+            return questions[:question_count]
+        else:
+            return generate_sample_questions_from_subject("general", question_count)
+            
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        return generate_sample_questions_from_subject("general", question_count)
+
+def generate_sample_questions_from_subject(subject, count=25):
+    """Fallback sample questions"""
+    sample_questions = []
+    for i in range(count):
+        sample_questions.append({
+            "question": f"Sample question {i+1} for {subject}?",
+            "options": [f"Option A", f"Option B", f"Option C", f"Option D"],
+            "correct_answer": f"Option A"
+        })
+    return sample_questions
+
+# ✅ NEW: GENERATE FROM CHAPTER ENDPOINT
+@app.post("/generate-from-chapter")
+def generate_from_chapter(
+    request: schemas.ChapterRequest,
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # 1. Daily limit check
+    limit_ok, message = check_daily_limit(db, current_user.id, request.subject)
+    if not limit_ok:
+        raise HTTPException(status_code=400, detail=message)
+    
+    # 2. Download DOC content
+    content = download_doc_content(request.class_level, request.subject, request.chapter)
+    if not content:
+        # Fallback to AI without content
+        content = f"Generate {request.question_count} questions for Class {request.class_level} {request.subject} Chapter {request.chapter}"
+    
+    # 3. Generate questions
+    questions = generate_questions_from_content(
+        content, 
+        request.question_count, 
+        request.difficulty, 
+        request.language
+    )
+    
+    # 4. Save to history
+    for q in questions:
+        history = models.QuestionHistory(
+            user_id=current_user.id,
+            class_level=request.class_level,
+            subject=request.subject,
+            chapter=request.chapter,
+            question_text=q["question"],
+            options=json.dumps(q["options"]),
+            correct_answer=q["correct_answer"],
+            difficulty=request.difficulty,
+            language=request.language
+        )
+        db.add(history)
+    db.commit()
+    
+    return {
+        "message": "Questions generated successfully",
+        "class_level": request.class_level,
+        "subject": request.subject,
+        "chapter": request.chapter,
+        "difficulty": request.difficulty,
+        "language": request.language,
+        "questions_generated": len(questions),
+        "daily_remaining": 25 - get_today_usage(db, current_user.id, request.subject),
+        "questions": questions
+    }
+
+# ✅ NEW: MY USAGE STATUS
+@app.get("/my-usage")
+def get_my_usage(
+    current_user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    today = date.today()
+    
+    usage = db.query(models.UsageLimit).filter(
+        models.UsageLimit.user_id == current_user.id,
+        models.UsageLimit.last_used_date == today
+    ).all()
+    
+    subjects_used = []
+    for u in usage:
+        subjects_used.append({
+            "subject": u.subject,
+            "questions_generated": u.questions_generated_today,
+            "remaining": 25 - u.questions_generated_today
+        })
+    
+    return {
+        "user_id": current_user.id,
+        "date": today.isoformat(),
+        "daily_limit": 25,
+        "subjects_used": subjects_used
+    }
+
+# ✅ OLD ROUTES (FOR BACKWARD COMPATIBILITY)
 @app.get("/subjects")
 def get_subjects():
     return {
@@ -101,7 +336,7 @@ def get_profile(current_user: models.User = Depends(get_current_user)):
         "email": current_user.email
     }
 
-# ✅ QUESTION GENERATION
+# ✅ OLD QUESTION GENERATION (FOR BACKWARD COMPATIBILITY)
 @app.post("/generate-questions")
 def generate_questions(
     request: schemas.QuestionRequest,
@@ -130,7 +365,6 @@ def generate_questions(
 def generate_questions_with_gemini(request: schemas.QuestionRequest):
     """Gemini AI se actual questions generate karein"""
     try:
-        # ✅ CORRECT MODEL NAME - Latest Gemini models
         model = genai.GenerativeModel('gemini-2.0-flash')
         
         prompt = f"""
@@ -163,7 +397,6 @@ def generate_questions_with_gemini(request: schemas.QuestionRequest):
             questions = json.loads(json_match.group())
             return questions[:3]  # Maximum 3 questions
         else:
-            # Agar JSON parse nahi ho, toh sample return karein
             return generate_sample_questions(request)
             
     except Exception as e:
@@ -178,16 +411,6 @@ def generate_sample_questions(request: schemas.QuestionRequest):
                 "question": "What is Newton's First Law of Motion?",
                 "options": ["F = ma", "Action-reaction", "Inertia", "Gravity"],
                 "correct_answer": "Inertia"
-            },
-            {
-                "question": "What is the SI unit of force?",
-                "options": ["Joule", "Newton", "Watt", "Pascal"],
-                "correct_answer": "Newton"
-            },
-            {
-                "question": "What does E=mc² represent?",
-                "options": ["Kinetic energy", "Potential energy", "Mass-energy equivalence", "Thermal energy"],
-                "correct_answer": "Mass-energy equivalence"
             }
         ],
         "maths": [
@@ -195,16 +418,6 @@ def generate_sample_questions(request: schemas.QuestionRequest):
                 "question": "What is 2 + 2?",
                 "options": ["3", "4", "5", "6"],
                 "correct_answer": "4"
-            },
-            {
-                "question": "What is the value of π (pi)?",
-                "options": ["3.14", "2.71", "1.61", "4.66"],
-                "correct_answer": "3.14"
-            },
-            {
-                "question": "What is the area of a circle with radius 2?",
-                "options": ["4π", "2π", "π", "8π"],
-                "correct_answer": "4π"
             }
         ],
         "chemistry": [
@@ -212,16 +425,6 @@ def generate_sample_questions(request: schemas.QuestionRequest):
                 "question": "What is H₂O?",
                 "options": ["Oxygen", "Hydrogen", "Water", "Carbon dioxide"],
                 "correct_answer": "Water"
-            },
-            {
-                "question": "What is the atomic number of Carbon?",
-                "options": ["6", "8", "12", "14"],
-                "correct_answer": "6"
-            },
-            {
-                "question": "What is the chemical symbol for Gold?",
-                "options": ["Go", "Gd", "Au", "Ag"],
-                "correct_answer": "Au"
             }
         ]
     }
@@ -245,7 +448,6 @@ def test_gemini():
         }
     
     try:
-        # ✅ CORRECT MODEL NAME - gemini-2.0-flash (fast aur reliable)
         model = genai.GenerativeModel('gemini-2.0-flash')
         response = model.generate_content("Say 'Hello World' in one word.")
         
@@ -256,23 +458,11 @@ def test_gemini():
             "message": "Gemini AI is working successfully!"
         }
     except Exception as e:
-        # Alternative model try karein
-        try:
-            model = genai.GenerativeModel('gemini-2.0-flash-lite')
-            response = model.generate_content("Say 'Hello World' in one word.")
-            
-            return {
-                "gemini_status": "connected",
-                "model_used": "gemini-2.0-flash-lite", 
-                "response": response.text,
-                "message": "Gemini AI is working! (using gemini-2.0-flash-lite)"
-            }
-        except Exception as e2:
-            return {
-                "gemini_status": "error",
-                "error": f"gemini-2.0-flash: {str(e)}, gemini-2.0-flash-lite: {str(e2)}",
-                "message": "Both Gemini models failed"
-            }
+        return {
+            "gemini_status": "error",
+            "error": str(e),
+            "message": "Gemini AI connection failed"
+        }
 
 # ✅ USER STATS
 @app.get("/user/stats")
