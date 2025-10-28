@@ -1,4 +1,4 @@
-# main.py - COMPLETE UPDATED VERSION WITH QUIZ SYSTEM 
+# main.py - COMPLETE UPDATED VERSION WITH DAILY LIMITS
 
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -19,7 +19,7 @@ from auth import create_access_token, get_current_user
 # Create tables
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Question-AI", version="3.0.0")
+app = FastAPI(title="Question-AI", version="2.0.0")
 
 # Gemini AI Setup
 try:
@@ -48,8 +48,8 @@ def home():
         "message": "Question AI API is running!", 
         "status": "active",
         "gemini_ai": gemini_status,
-        "version": "3.0.0",
-        "features": ["daily_limits", "chapter_based", "multi_language", "quiz_system"]
+        "version": "2.0.0",
+        "features": ["daily_limits", "chapter_based", "multi_language"]
     }
 
 @app.get("/health")
@@ -233,9 +233,8 @@ def generate_from_chapter(
         request.language
     )
     
-    # 4. Save to history with unique IDs for quiz system
-    saved_questions = []
-    for i, q in enumerate(questions):
+    # 4. Save to history
+    for q in questions:
         history = models.QuestionHistory(
             user_id=current_user.id,
             class_level=request.class_level,
@@ -248,14 +247,6 @@ def generate_from_chapter(
             language=request.language
         )
         db.add(history)
-        db.flush()  # Get the ID
-        saved_questions.append({
-            "id": history.id,
-            "question": q["question"],
-            "options": q["options"],
-            "correct_answer": q["correct_answer"]
-        })
-    
     db.commit()
     
     return {
@@ -267,179 +258,7 @@ def generate_from_chapter(
         "language": request.language,
         "questions_generated": len(questions),
         "daily_remaining": 25 - get_today_usage(db, current_user.id, request.subject),
-        "questions": saved_questions  # Now includes IDs for quiz
-    }
-
-# ✅ NEW: QUIZ SUBMISSION ENDPOINT
-@app.post("/submit-quiz")
-def submit_quiz(
-    request: schemas.QuizSubmission,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    try:
-        # Calculate results
-        correct_count = 0
-        detailed_results = []
-        
-        for answer in request.answers:
-            # Find the original question
-            original_question = None
-            for q in request.questions:
-                if q.get('id') == answer.question_id:
-                    original_question = q
-                    break
-            
-            if not original_question:
-                continue
-            
-            is_correct = (answer.selected_answer == original_question['correct_answer'])
-            if is_correct:
-                correct_count += 1
-            
-            detailed_results.append({
-                "question_id": answer.question_id,
-                "question_text": original_question['question'],
-                "options": original_question['options'],
-                "selected_answer": answer.selected_answer,
-                "correct_answer": original_question['correct_answer'],
-                "is_correct": is_correct
-            })
-        
-        total_questions = len(request.answers)
-        score_percentage = (correct_count / total_questions) * 100 if total_questions > 0 else 0
-        
-        # Save quiz attempt
-        quiz_attempt = models.QuizAttempt(
-            user_id=current_user.id,
-            class_level=request.class_level,
-            subject=request.subject,
-            chapter=request.chapter,
-            total_questions=total_questions,
-            correct_answers=correct_count,
-            score_percentage=score_percentage,
-            time_taken=request.time_taken
-        )
-        db.add(quiz_attempt)
-        db.flush()  # Get the quiz ID
-        
-        # Save student responses
-        for result in detailed_results:
-            response = models.StudentResponse(
-                user_id=current_user.id,
-                quiz_attempt_id=quiz_attempt.id,
-                question_id=result["question_id"],
-                question_text=result["question_text"],
-                selected_answer=result["selected_answer"],
-                correct_answer=result["correct_answer"],
-                is_correct=1 if result["is_correct"] else 0,
-                options=json.dumps(result["options"])
-            )
-            db.add(response)
-        
-        db.commit()
-        
-        return {
-            "quiz_id": quiz_attempt.id,
-            "total_questions": total_questions,
-            "correct_answers": correct_count,
-            "wrong_answers": total_questions - correct_count,
-            "score_percentage": round(score_percentage, 2),
-            "time_taken": request.time_taken,
-            "subject": request.subject,
-            "chapter": request.chapter,
-            "class_level": request.class_level,
-            "attempted_at": quiz_attempt.attempted_at.isoformat(),
-            "detailed_results": detailed_results
-        }
-        
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Quiz submission failed: {str(e)}")
-
-# ✅ NEW: PERFORMANCE HISTORY ENDPOINT
-@app.get("/performance-history")
-def get_performance_history(
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    attempts = db.query(models.QuizAttempt).filter(
-        models.QuizAttempt.user_id == current_user.id
-    ).order_by(models.QuizAttempt.attempted_at.desc()).limit(20).all()
-    
-    history = []
-    for attempt in attempts:
-        history.append({
-            "quiz_id": attempt.id,
-            "subject": attempt.subject,
-            "chapter": attempt.chapter,
-            "score_percentage": attempt.score_percentage,
-            "correct_answers": attempt.correct_answers,
-            "total_questions": attempt.total_questions,
-            "attempted_at": attempt.attempted_at.isoformat()
-        })
-    
-    # Calculate overall stats
-    total_attempts = len(attempts)
-    if total_attempts > 0:
-        avg_score = sum([a.score_percentage for a in attempts]) / total_attempts
-        best_score = max([a.score_percentage for a in attempts])
-        worst_score = min([a.score_percentage for a in attempts])
-    else:
-        avg_score = best_score = worst_score = 0
-    
-    return {
-        "user_id": current_user.id,
-        "total_attempts": total_attempts,
-        "average_score": round(avg_score, 2),
-        "best_score": round(best_score, 2),
-        "worst_score": round(worst_score, 2),
-        "history": history
-    }
-
-# ✅ NEW: QUIZ DETAILS ENDPOINT
-@app.get("/quiz-details/{quiz_id}")
-def get_quiz_details(
-    quiz_id: int,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # Get quiz attempt
-    quiz_attempt = db.query(models.QuizAttempt).filter(
-        models.QuizAttempt.id == quiz_id,
-        models.QuizAttempt.user_id == current_user.id
-    ).first()
-    
-    if not quiz_attempt:
-        raise HTTPException(status_code=404, detail="Quiz not found")
-    
-    # Get detailed responses
-    responses = db.query(models.StudentResponse).filter(
-        models.StudentResponse.quiz_attempt_id == quiz_id
-    ).all()
-    
-    detailed_results = []
-    for response in responses:
-        detailed_results.append({
-            "question_id": response.question_id,
-            "question_text": response.question_text,
-            "options": json.loads(response.options),
-            "selected_answer": response.selected_answer,
-            "correct_answer": response.correct_answer,
-            "is_correct": bool(response.is_correct)
-        })
-    
-    return {
-        "quiz_id": quiz_attempt.id,
-        "subject": quiz_attempt.subject,
-        "chapter": quiz_attempt.chapter,
-        "class_level": quiz_attempt.class_level,
-        "total_questions": quiz_attempt.total_questions,
-        "correct_answers": quiz_attempt.correct_answers,
-        "score_percentage": quiz_attempt.score_percentage,
-        "time_taken": quiz_attempt.time_taken,
-        "attempted_at": quiz_attempt.attempted_at.isoformat(),
-        "detailed_results": detailed_results
+        "questions": questions
     }
 
 # ✅ NEW: MY USAGE STATUS
