@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from datetime import datetime
 
 class UserCreate(BaseModel):
@@ -57,44 +57,3 @@ class MyUsageResponse(BaseModel):
     user_id: int
     date: str
     subjects_used: List[UsageStatus]
-
-# NEW SCHEMAS FOR QUIZ SYSTEM
-class StudentAnswer(BaseModel):
-    question_id: int
-    selected_answer: str
-
-class QuizSubmission(BaseModel):
-    class_level: int
-    subject: str
-    chapter: int
-    questions: List[Dict[str, Any]]  # Original questions with IDs
-    answers: List[StudentAnswer]
-    time_taken: int = 0
-
-class QuizResult(BaseModel):
-    quiz_id: int
-    total_questions: int
-    correct_answers: int
-    wrong_answers: int
-    score_percentage: float
-    time_taken: int
-    subject: str
-    chapter: int
-    class_level: int
-    attempted_at: datetime
-
-class PerformanceHistory(BaseModel):
-    quiz_id: int
-    subject: str
-    chapter: int
-    score_percentage: float
-    correct_answers: int
-    total_questions: int
-    attempted_at: datetime
-
-class DetailedResult(BaseModel):
-    question: str
-    options: List[str]
-    selected_answer: str
-    correct_answer: str
-    is_correct: bool
