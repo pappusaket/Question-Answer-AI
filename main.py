@@ -9,7 +9,7 @@ import traceback
 from datetime import date, datetime
 import requests
 from docx import Document
-import io
+import io 
 
 from database import get_db, engine
 import models
