@@ -1,4 +1,4 @@
-# main.py - COMPLETE UPDATED VERSION WITH QUIZ SYSTEM 
+# main.py - COMPLETE UPDATED VERSION WITH QUIZ SYSTEM
 
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ import traceback
 from datetime import date, datetime
 import requests
 from docx import Document
-import io 
+import io
 
 from database import get_db, engine
 import models
